@@ -9,6 +9,58 @@ import (
 
 var byteSliceTyp reflect.Type = reflect.TypeOf([]byte{})
 
+type evalMode int
+
+const (
+	evalModeDefault evalMode = iota
+	evalModeCollection
+)
+
+type evalStackItem struct {
+	mode evalMode
+
+	// used for modes evalModeCollection
+	indexName   string
+	valueName   string
+	indexFields FieldConfigurations
+	valueFields FieldConfigurations
+	index       reflect.Value
+
+	// used for all modes
+	value reflect.Value
+}
+
+const defaultEvalContextStackSize int = 4
+
+type evalContext struct {
+	stack []evalStackItem
+	depth int
+}
+
+func (c *evalContext) push(si evalStackItem) {
+	if c.depth >= cap(c.stack) {
+		c.stack = append(c.stack, si)
+	} else {
+		c.stack[c.depth] = si
+	}
+
+	c.depth += 1
+}
+
+func (c *evalContext) pop() {
+	if c.depth > 0 {
+		c.depth -= 1
+	}
+}
+
+func (c *evalContext) head() *evalStackItem {
+	if c.depth == 0 {
+		return nil
+	}
+
+	return &c.stack[c.depth-1]
+}
+
 var primitiveEqualityFns = map[reflect.Kind]func(first interface{}, second reflect.Value) bool{
 	reflect.Bool:    doEqualBool,
 	reflect.Int:     doEqualInt,
@@ -155,167 +207,292 @@ func getMatchExprValue(expression *MatchExpression) interface{} {
 	return expression.Value.Raw
 }
 
-func evaluateMatchExpressionRecurse(expression *MatchExpression, depth int, rvalue reflect.Value, fields FieldConfigurations) (bool, error) {
-	// NOTE: Some information about preconditions is probably good to have here. Parsing
-	//       as well as the extra validation pass that MUST occur before executing the
-	//       expression evaluation allow us to make some assumptions here.
-	//
-	//       1. Selectors MUST be valid. Therefore we don't need to test if they should
-	//          be valid. This means that we can index in the FieldConfigurations map
-	//          and a configuration MUST be present.
-	//       2. If expression.Value could be converted it will already have been. No need to try
-	//          and convert again. There is also no need to check that the types match as they MUST
-	//          in order to have passed validation.
-	//       3. If we are presented with a map and we have more selectors to go through then its key
-	//          type MUST be a string
-	//       4. We already have validated that the operations can be performed on the target data.
-	//          So calls to the doMatch* functions don't need to do any checking to ensure that
-	//          calling various fns on them will work and not panic - because they wont.
+func getValueForSelector(sel Selector, rvalue reflect.Value, fields FieldConfigurations) (*reflect.Value, *FieldConfiguration, error) {
+	value := rvalue
+	var cfg *FieldConfiguration
 
-	if depth >= len(expression.Selector) {
-		// we have reached the end of the selector - execute the match operations
-		switch expression.Operator {
-		case MatchEqual:
-			return doMatchEqual(expression, rvalue)
-		case MatchNotEqual:
-			result, err := doMatchEqual(expression, rvalue)
-			if err == nil {
-				return !result, nil
+	for idx, fieldName := range sel {
+		switch value.Kind() {
+		case reflect.Struct:
+			cfg = fields[FieldName(fieldName)]
+
+			if cfg.StructFieldName != "" {
+				fieldName = cfg.StructFieldName
 			}
-			return false, err
-		case MatchIn:
-			return doMatchIn(expression, rvalue)
-		case MatchNotIn:
-			result, err := doMatchIn(expression, rvalue)
-			if err == nil {
-				return !result, nil
+
+			value = reflect.Indirect(value.FieldByName(fieldName))
+			fields = cfg.SubFields
+		case reflect.Slice, reflect.Array:
+			return nil, nil, fmt.Errorf("Invalid AST: intermediate selector references a list type")
+		case reflect.Map:
+			cfg = fields[FieldNameAny]
+			value = reflect.Indirect(value.MapIndex(reflect.ValueOf(fieldName)))
+
+			if !value.IsValid() {
+				return nil, cfg, nil
 			}
-			return false, err
-		case MatchIsEmpty:
-			return doMatchIsEmpty(expression, rvalue)
-		case MatchIsNotEmpty:
-			result, err := doMatchIsEmpty(expression, rvalue)
-			if err == nil {
-				return !result, nil
-			}
-			return false, err
-		case MatchMatches:
-			return doMatchMatches(expression, rvalue)
-		case MatchNotMatches:
-			result, err := doMatchMatches(expression, rvalue)
-			if err == nil {
-				return !result, nil
-			}
-			return false, err
+
+			fields = cfg.SubFields
 		default:
-			return false, fmt.Errorf("Invalid match operation: %d", expression.Operator)
+			return nil, nil, fmt.Errorf("Value at selector %q with type %s does not support nested field selection", sel[:idx+1], value.Kind())
 		}
 	}
 
-	switch rvalue.Kind() {
-	case reflect.Struct:
-		fieldName := expression.Selector[depth]
-		fieldConfig := fields[FieldName(fieldName)]
+	return &value, cfg, nil
+}
 
-		if fieldConfig.StructFieldName != "" {
-			fieldName = fieldConfig.StructFieldName
+func evaluateMatchExpression(exp *MatchExpression, ctx *evalContext, fields FieldConfigurations) (bool, error) {
+	var sel Selector
+	var value reflect.Value
+
+	curCtx := ctx.head()
+
+	if curCtx == nil {
+		return false, fmt.Errorf("Invalid evaluation context: nil stack")
+	}
+
+	switch curCtx.mode {
+	case evalModeDefault:
+		sel = exp.Selector
+		value = curCtx.value
+	case evalModeCollection:
+		sel = exp.Selector[1:]
+		if curCtx.indexName != "" && exp.Selector[0] == curCtx.indexName {
+			value = curCtx.index
+			fields = curCtx.indexFields
+		} else if curCtx.valueName != "" && exp.Selector[0] == curCtx.valueName {
+			value = curCtx.value
+			fields = curCtx.valueFields
+		} else {
+			return false, fmt.Errorf("Invalid selector: %q", exp.Selector[0])
 		}
+	default:
+		return false, fmt.Errorf("Invalid evaluation context mode: %d", curCtx.mode)
+	}
 
-		value := reflect.Indirect(rvalue.FieldByName(fieldName))
+	matchValue, _, err := getValueForSelector(sel, value, fields)
+	if err != nil {
+		return false, err
+	}
 
-		if matcher, ok := value.Interface().(MatchExpressionEvaluator); ok {
-			return matcher.EvaluateMatch(expression.Selector[depth+1:], expression.Operator, getMatchExprValue(expression))
+	if matchValue == nil {
+		// when the key doesn't exist in the map
+		switch exp.Operator {
+		// MatchEqual, MatchIsNotEmpty and MatchIn cannot possible be true for a not found value
+		case MatchEqual, MatchIsNotEmpty, MatchIn:
+			return false, nil
+		default:
+			// MatchNotEqual, MatchIsEmpty, MatchNotIn
+			// Whatever you were looking for cannot be equal because it doesn't exist
+			// Similarly it cannot be in some other container and every other container
+			// is always empty.
+			return true, nil
 		}
+	}
 
-		return evaluateMatchExpressionRecurse(expression, depth+1, value, fieldConfig.SubFields)
+	switch exp.Operator {
+	case MatchEqual:
+		return doMatchEqual(exp, *matchValue)
+	case MatchNotEqual:
+		result, err := doMatchEqual(exp, *matchValue)
+		if err == nil {
+			return !result, nil
+		}
+		return false, err
+	case MatchIn:
+		return doMatchIn(exp, *matchValue)
+	case MatchNotIn:
+		result, err := doMatchIn(exp, *matchValue)
+		if err == nil {
+			return !result, nil
+		}
+		return false, err
+	case MatchIsEmpty:
+		return doMatchIsEmpty(exp, *matchValue)
+	case MatchIsNotEmpty:
+		result, err := doMatchIsEmpty(exp, *matchValue)
+		if err == nil {
+			return !result, nil
+		}
+		return false, err
+	case MatchMatches:
+		return doMatchMatches(exp, *matchValue)
+	case MatchNotMatches:
+		result, err := doMatchMatches(exp, *matchValue)
+		if err == nil {
+			return !result, nil
+		}
+		return false, err
+	default:
+		return false, fmt.Errorf("Invalid match operation: %d", exp.Operator)
+	}
+}
 
-	case reflect.Slice, reflect.Array:
-		// TODO (mkeeler) - Should we support implementing the MatchExpressionEvaluator interface for slice/array types?
-		//                  Punting on that for now.
-		for i := 0; i < rvalue.Len(); i++ {
-			item := reflect.Indirect(rvalue.Index(i))
-			// we use the same depth because right now we are not allowing
-			// selection of individual slice/array elements
-			result, err := evaluateMatchExpressionRecurse(expression, depth, item, fields)
+func evaluateCollectionExpression(exp *CollectionExpression, ctx *evalContext, fields FieldConfigurations) (bool, error) {
+	var sel Selector
+	var value reflect.Value
+
+	curCtx := ctx.head()
+
+	if curCtx == nil {
+		return false, fmt.Errorf("Invalid evaluation context: nil stack")
+	}
+
+	switch curCtx.mode {
+	case evalModeDefault:
+		sel = exp.Selector
+		value = curCtx.value
+	case evalModeCollection:
+		sel = exp.Selector[1:]
+		// we don't need to care about the index/map key here as they cannot be used as the main selector of
+		// a collection expression because we cannot iterate over strings (map) and ints (list)
+		if curCtx.valueName != "" && exp.Selector[0] == curCtx.valueName {
+			value = curCtx.value
+			fields = curCtx.valueFields
+		} else {
+			return false, fmt.Errorf("Invalid selector in collection expression: %s", exp.Selector[0])
+		}
+	default:
+		return false, fmt.Errorf("Invalid evaluation context mode: %d", curCtx.mode)
+	}
+
+	collectionValue, fieldConfig, err := getValueForSelector(sel, value, fields)
+	if err != nil {
+		return false, err
+	}
+
+	if collectionValue == nil {
+		return false, nil
+	}
+
+	var indexName string
+	var valueName string
+	switch exp.NameBinding.Mode {
+	case CollectionBindDefault:
+		if fieldConfig.CollectionType == CollectionTypeMap {
+			indexName = exp.NameBinding.Default
+		} else {
+			valueName = exp.NameBinding.Default
+		}
+	case CollectionBindIndex:
+		indexName = exp.NameBinding.Index
+	case CollectionBindValue:
+		valueName = exp.NameBinding.Value
+	case CollectionBindIndexAndValue:
+		indexName = exp.NameBinding.Index
+		valueName = exp.NameBinding.Value
+	}
+
+	switch fieldConfig.CollectionType {
+	case CollectionTypeMap:
+		iter := (*collectionValue).MapRange()
+		for iter.Next() {
+			ctx.push(evalStackItem{
+				mode:        evalModeCollection,
+				indexName:   indexName,
+				valueName:   valueName,
+				index:       reflect.Indirect(iter.Key()),
+				indexFields: fieldConfig.IndexConfiguration.SubFields,
+				value:       reflect.Indirect(iter.Value()),
+				valueFields: fieldConfig.ValueConfiguration.SubFields,
+			})
+			result, err := evaluateRecurse(exp.Expression, ctx, fieldConfig.SubFields)
+			ctx.pop()
+
 			if err != nil {
 				return false, err
 			}
 
-			// operations on slices are implicity ANY operations currently so the first truthy evaluation we find we can stop
-			if result {
+			if result && exp.Operator == CollectionOpAny {
 				return true, nil
-			}
-		}
-
-		return false, nil
-	case reflect.Map:
-		// TODO (mkeeler) - Should we support implementing the MatchExpressionEvaluator interface for map types
-		//                  such as the FieldConfigurations type? Maybe later
-		//
-		value := reflect.Indirect(rvalue.MapIndex(reflect.ValueOf(expression.Selector[depth])))
-
-		if !value.IsValid() {
-			// when the key doesn't exist in the map
-			switch expression.Operator {
-			case MatchEqual, MatchIsNotEmpty, MatchIn:
+			} else if !result && exp.Operator == CollectionOpAll {
 				return false, nil
-			default:
-				// MatchNotEqual, MatchIsEmpty, MatchNotIn
-				// Whatever you were looking for cannot be equal because it doesn't exist
-				// Similarly it cannot be in some other container and every other container
-				// is always empty.
-				return true, nil
 			}
 		}
 
-		if matcher, ok := value.Interface().(MatchExpressionEvaluator); ok {
-			return matcher.EvaluateMatch(expression.Selector[depth+1:], expression.Operator, getMatchExprValue(expression))
+		// if we got here then we were executing an all expression and all matched
+		// or executing an any expression and none matched or there were no map elements
+		// If there were no map elements then an "all" expression will return true and an
+		// "any" expression will return false. This seems like sane behavior.
+		return exp.Operator == CollectionOpAll, nil
+
+	case CollectionTypeList:
+		for i := 0; i < (*collectionValue).Len(); i++ {
+			ctx.push(evalStackItem{
+				mode:        evalModeCollection,
+				indexName:   indexName,
+				valueName:   valueName,
+				index:       reflect.ValueOf(i),
+				indexFields: fieldConfig.IndexConfiguration.SubFields,
+				value:       reflect.Indirect((*collectionValue).Index(i)),
+				valueFields: fieldConfig.ValueConfiguration.SubFields,
+			})
+			result, err := evaluateRecurse(exp.Expression, ctx, fieldConfig.SubFields)
+			ctx.pop()
+
+			if err != nil {
+				return false, err
+			}
+
+			if result && exp.Operator == CollectionOpAny {
+				return true, nil
+			} else if !result && exp.Operator == CollectionOpAll {
+				return false, nil
+			}
+
 		}
 
-		return evaluateMatchExpressionRecurse(expression, depth+1, value, fields[FieldNameAny].SubFields)
+		// if we got here then we were executing an all expression and all matched
+		// or executing an any expression and none matched or there were no map elements
+		// If there were no map elements then an "all" expression will return true and an
+		// "any" expression will return false. This seems like sane behavior.
+		return exp.Operator == CollectionOpAll, nil
 	default:
-		return false, fmt.Errorf("Value at selector %q with type %s does not support nested field selection", expression.Selector[:depth], rvalue.Kind())
+		return false, fmt.Errorf("Invalid collection type: %d", fieldConfig.CollectionType)
 	}
 }
 
-func evaluateMatchExpression(expression *MatchExpression, datum interface{}, fields FieldConfigurations) (bool, error) {
-	if matcher, ok := datum.(MatchExpressionEvaluator); ok {
-		return matcher.EvaluateMatch(expression.Selector, expression.Operator, getMatchExprValue(expression))
-	}
-
-	rvalue := reflect.Indirect(reflect.ValueOf(datum))
-
-	return evaluateMatchExpressionRecurse(expression, 0, rvalue, fields)
-}
-
-func evaluate(ast Expression, datum interface{}, fields FieldConfigurations) (bool, error) {
+func evaluateRecurse(ast Expression, ctx *evalContext, fields FieldConfigurations) (bool, error) {
 	switch node := ast.(type) {
 	case *UnaryExpression:
 		switch node.Operator {
 		case UnaryOpNot:
-			result, err := evaluate(node.Operand, datum, fields)
+			result, err := evaluateRecurse(node.Operand, ctx, fields)
 			return !result, err
 		}
 	case *BinaryExpression:
 		switch node.Operator {
 		case BinaryOpAnd:
-			result, err := evaluate(node.Left, datum, fields)
-			if err != nil || result == false {
+			result, err := evaluateRecurse(node.Left, ctx, fields)
+			if err != nil || !result {
 				return result, err
 			}
 
-			return evaluate(node.Right, datum, fields)
+			return evaluateRecurse(node.Right, ctx, fields)
 
 		case BinaryOpOr:
-			result, err := evaluate(node.Left, datum, fields)
-			if err != nil || result == true {
+			result, err := evaluateRecurse(node.Left, ctx, fields)
+			if err != nil || result {
 				return result, err
 			}
 
-			return evaluate(node.Right, datum, fields)
+			return evaluateRecurse(node.Right, ctx, fields)
 		}
+	case *CollectionExpression:
+		return evaluateCollectionExpression(node, ctx, fields)
 	case *MatchExpression:
-		return evaluateMatchExpression(node, datum, fields)
+		return evaluateMatchExpression(node, ctx, fields)
 	}
-	return false, fmt.Errorf("Invalid AST node")
+	return false, fmt.Errorf("Invalid AST node: %T", ast)
+}
+
+func evaluate(ast Expression, datum interface{}, fields FieldConfigurations) (bool, error) {
+	ctx := evalContext{
+		// 4 should be sufficiently large unless we have more than 3 nested collection ops
+		stack: make([]evalStackItem, defaultEvalContextStackSize),
+		depth: 0,
+	}
+
+	ctx.push(evalStackItem{mode: evalModeDefault, value: reflect.ValueOf(datum)})
+	return evaluateRecurse(ast, &ctx, fields)
 }

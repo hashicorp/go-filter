@@ -7,14 +7,16 @@
 Currently `bexpr` does not support operating on types with cyclical structures. Attempting to generate the fields
 of these types will cause a stack overflow. There are however two means of getting around this. First if you do not
 need the nested type to be available during evaluation then you can simply add the  `bexpr:"-"` struct tag to the
-fields where that type is referenced and `bexpr` will not delve further into that type. A second solution is implement
-the `MatchExpressionEvaluator` interface and provide the necessary field configurations yourself.
+fields where that type is referenced and `bexpr` will not delve further into that type.
 
 Eventually this lib will support handling these cycles automatically.
 
-## Stability
+## Non-Reflection Based Evaluation
 
-Currently there is a `MatchExpressionEvaluator` interface that can be used to implement custom behavior. This interface should be considered *experimental* and is likely to change in the future. One need for the change is to make it easier for custom implementations to re-invoke the main bexpr logic on subfields so that they do not have to implement custom logic for themselves and every sub field they contain. With the current interface its not really possible.
+The previous `MatchExpressionEvaluator` interface was removed as it didn't work well with the collection expressions.
+Eventually the hope is to create a new interface that can be implemented to provide reflection-free evaluation and
+more flexibility. That would require more design and as our products don't currently use the interface anyways its
+just being removed for now.
 
 ## Usage (Reflection)
 

@@ -113,91 +113,33 @@ type testNestedTypes struct {
 	TopInt int
 }
 
-type testStructInterfaceImpl struct {
-	storage map[string]*testFlatStruct
-}
-
-func (t *testStructInterfaceImpl) FieldConfigurations() FieldConfigurations {
-	// only going to allow foo, bar and baz for selectors
-
-	subfields, _ := GenerateFieldConfigurations((*testFlatStruct)(nil))
-
-	fields := make(FieldConfigurations)
-
-	subfield := &FieldConfiguration{
-		SubFields: subfields,
+func validateFieldConfiguration(t *testing.T, expected, actual *FieldConfiguration, name, path string) bool {
+	if expected == nil {
+		return assert.Nil(t, actual, "Field %q on path %q should be nil and isn't", name, path)
 	}
-	fields[FieldName("foo")] = subfield
-	fields[FieldName("bar")] = subfield
-	fields[FieldName("baz")] = subfield
 
-	return fields
-}
-
-func (t *testStructInterfaceImpl) EvaluateMatch(sel Selector, op MatchOperator, value interface{}) (bool, error) {
-	switch sel[0] {
-	case "foo", "bar", "baz":
-		storageVal, ok := t.storage[sel[0]]
-		if !ok {
-			// default to no match if this struct isn't stored
-			return false, nil
-		}
-
-		if len(sel) < 2 {
-			return false, fmt.Errorf("Need more selector")
-		}
-
-		dataType, ok := testFlatStructKindMap[sel[1]]
-		if !ok {
-			return false, fmt.Errorf("Invalid selector")
-		}
-
-		eqFn, ok := primitiveEqualityFns[dataType]
-		if !ok {
-			return false, fmt.Errorf("Invalid data type")
-		}
-
-		result := false
-		switch sel[1] {
-		case "Int":
-			result = eqFn(value, reflect.ValueOf(storageVal.Int))
-		case "Int8":
-			result = eqFn(value, reflect.ValueOf(storageVal.Int8))
-		case "Int16":
-			result = eqFn(value, reflect.ValueOf(storageVal.Int16))
-		case "Int32":
-			result = eqFn(value, reflect.ValueOf(storageVal.Int32))
-		case "Int64":
-			result = eqFn(value, reflect.ValueOf(storageVal.Int64))
-		case "Uint":
-			result = eqFn(value, reflect.ValueOf(storageVal.Uint))
-		case "Uint8":
-			result = eqFn(value, reflect.ValueOf(storageVal.Uint8))
-		case "Uint16":
-			result = eqFn(value, reflect.ValueOf(storageVal.Uint16))
-		case "Uint32":
-			result = eqFn(value, reflect.ValueOf(storageVal.Uint32))
-		case "Uint64":
-			result = eqFn(value, reflect.ValueOf(storageVal.Uint64))
-		case "Float32":
-			result = eqFn(value, reflect.ValueOf(storageVal.Float32))
-		case "Float64":
-			result = eqFn(value, reflect.ValueOf(storageVal.Float64))
-		case "Bool":
-			result = eqFn(value, reflect.ValueOf(storageVal.Bool))
-		case "String":
-			result = eqFn(value, reflect.ValueOf(storageVal.String))
-		default:
-			return false, fmt.Errorf("Invalid data type")
-		}
-
-		if op == MatchNotEqual {
-			return !result, nil
-		}
-		return result, nil
-	default:
-		return false, fmt.Errorf("Invalid selector")
+	ok := assert.NotNil(t, actual, "Field %q on path %q should not be nil and is", name, path)
+	if !ok {
+		return ok
 	}
+
+	ok = ok && assert.Equal(t, expected.StructFieldName, actual.StructFieldName, "Field %q on path %q have different StructFieldNames - Expected: %q, Actual: %q", name, path, expected.StructFieldName, actual.StructFieldName)
+	ok = ok && assert.ElementsMatch(t, expected.SupportedOperations, actual.SupportedOperations, "Fields %q on path %q have different SupportedOperations - Expected: %v, Actual: %v", name, path, expected.SupportedOperations, actual.SupportedOperations)
+	ok = ok && assert.Equal(t, expected.CollectionType, actual.CollectionType, "Field %q on path %q has different CollectionType - Expected: %q, Actual: %q", name, path, expected.CollectionType, actual.CollectionType)
+
+	newPath := name
+	if newPath == "" {
+		newPath = "*"
+	}
+	if path != "" {
+		newPath = fmt.Sprintf("%s.%s", path, newPath)
+	}
+
+	ok = ok && validateFieldConfiguration(t, expected.IndexConfiguration, actual.IndexConfiguration, "<index>", newPath)
+	ok = ok && validateFieldConfiguration(t, expected.ValueConfiguration, actual.ValueConfiguration, "<value>", newPath)
+	ok = ok && validateFieldConfigurationsRecurse(t, expected.SubFields, actual.SubFields, newPath)
+
+	return ok
 }
 
 func validateFieldConfigurationsRecurse(t *testing.T, expected, actual FieldConfigurations, path string) bool {
@@ -208,17 +150,7 @@ func validateFieldConfigurationsRecurse(t *testing.T, expected, actual FieldConf
 	for fieldName, expectedConfig := range expected {
 		actualConfig, ok := actual[fieldName]
 		ok = ok && assert.True(t, ok, "Actual configuration is missing field %q", fieldName)
-		ok = ok && assert.Equal(t, expectedConfig.StructFieldName, actualConfig.StructFieldName, "Field %q on path %q have different StructFieldNames - Expected: %q, Actual: %q", fieldName, path, expectedConfig.StructFieldName, actualConfig.StructFieldName)
-		ok = ok && assert.ElementsMatch(t, expectedConfig.SupportedOperations, actualConfig.SupportedOperations, "Fields %q on path %q have different SupportedOperations - Expected: %v, Actual: %v", fieldName, path, expectedConfig.SupportedOperations, actualConfig.SupportedOperations)
-
-		newPath := string(fieldName)
-		if newPath == "" {
-			newPath = "*"
-		}
-		if path != "" {
-			newPath = fmt.Sprintf("%s.%s", path, newPath)
-		}
-		ok = ok && validateFieldConfigurationsRecurse(t, expectedConfig.SubFields, actualConfig.SubFields, newPath)
+		ok = ok && validateFieldConfiguration(t, expectedConfig, actualConfig, string(fieldName), path)
 
 		if !ok {
 			break

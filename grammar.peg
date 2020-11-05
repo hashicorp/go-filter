@@ -52,8 +52,42 @@ ParenthesizedExpression "grouping" <- "(" _? expr:OrExpression _? ")" {
    return expr, nil
 } / expr:MatchExpression {
    return expr, nil
+} / expr:CollectionSelectorExpression {
+   return expr, nil
 } / "(" _? OrExpression _? !")" &{
    return false, errors.New("Unmatched parentheses")
+}
+
+CollectionSelectorExpression "collection-selector" <- op:(CollectionOpAny / CollectionOpAll) selector:Selector _ "as" _ binding:CollectionIdentifiers _? "{" _? expr:OrExpression _? "}" {
+   return &CollectionExpression{
+      Operator: op.(CollectionOperator),
+      Selector: selector.(Selector),
+      NameBinding: *binding.(*CollectionNameBinding),
+      Expression: expr.(Expression),
+   }, nil
+}
+
+CollectionIdentifiers "collection-identifiers" <- id1:Identifier _? "," _? id2:Identifier {
+   return &CollectionNameBinding{
+      Mode: CollectionBindIndexAndValue,
+      Index: id1.(string),
+      Value: id2.(string),
+   }, nil
+} / id1:Identifier _? "," _? "_" {
+   return &CollectionNameBinding{
+      Mode: CollectionBindIndex,
+      Index: id1.(string),
+   }, nil
+} / "_" _? "," _? id2:Identifier {
+   return &CollectionNameBinding{
+      Mode: CollectionBindValue,
+      Value: id2.(string),
+   }, nil
+} / id:Identifier {
+   return &CollectionNameBinding{
+      Mode: CollectionBindDefault,
+      Default: id.(string),
+   }, nil
 }
 
 MatchExpression "match" <- MatchSelectorOpValue / MatchSelectorOp / MatchValueOpSelector
@@ -102,6 +136,15 @@ MatchMatches <- _ "matches" _ {
 MatchNotMatches <- _ "not" _ "matches" _ {
    return MatchNotMatches, nil
 }
+
+CollectionOpAny <- "any" _ {
+   return CollectionOpAny, nil
+}
+
+CollectionOpAll <- "all" _ {
+   return CollectionOpAll, nil
+}
+
 
 Selector "selector" <- first:Identifier rest:SelectorOrIndex* {
    sel := Selector{

@@ -91,6 +91,169 @@ func TestExpressionParsing(t *testing.T) {
 			},
 			err: "",
 		},
+		"Any Expression": {
+			input: "any foo.bar as elem { `proxy` in elem }",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAny,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:    CollectionBindDefault,
+					Default: "elem",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"elem"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "proxy"},
+				},
+			},
+			err: "",
+		},
+		"Any Expression - 2 idents": {
+			input: "any foo.bar as index, value { index contains proxy }",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAny,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:  CollectionBindIndexAndValue,
+					Index: "index",
+					Value: "value",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"index"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "proxy"},
+				},
+			},
+			err: "",
+		},
+		"Any Expression - 2 idents first underscore": {
+			input: "any foo.bar as _, value { value contains proxy }",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAny,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:  CollectionBindValue,
+					Value: "value",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"value"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "proxy"},
+				},
+			},
+			err: "",
+		},
+		"Any Expression - 2 idents second underscore": {
+			input: "any foo.bar as index, _ { index contains proxy }",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAny,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:  CollectionBindIndex,
+					Index: "index",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"index"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "proxy"},
+				},
+			},
+			err: "",
+		},
+		"All Expression": {
+			input: "all foo.bar as elem { elem.baz contains something}",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAll,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:    CollectionBindDefault,
+					Default: "elem",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"elem", "baz"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "something"},
+				},
+			},
+			err: "",
+		},
+		"All Expression - 2 idents": {
+			input: "all foo.bar as index, elem { elem.baz contains something}",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAll,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:  CollectionBindIndexAndValue,
+					Index: "index",
+					Value: "elem",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"elem", "baz"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "something"},
+				},
+			},
+			err: "",
+		},
+		"All Expression - 2 idents first underscore": {
+			input: "all foo.bar as _, elem { elem.baz contains something}",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAll,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:  CollectionBindValue,
+					Value: "elem",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"elem", "baz"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "something"},
+				},
+			},
+			err: "",
+		},
+		"All Expression - 2 idents second underscore": {
+			input: "all foo.bar as index, _ { index contains something}",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAll,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:  CollectionBindIndex,
+					Index: "index",
+				},
+				Expression: &MatchExpression{
+					Selector: Selector{"index"},
+					Operator: MatchIn,
+					Value:    &MatchValue{Raw: "something"},
+				},
+			},
+			err: "",
+		},
+		"Nested Collection Expression": {
+			input: "any foo.bar as elem { all elem.Checks as chk { chk.Status == passing} }",
+			expected: &CollectionExpression{
+				Operator: CollectionOpAny,
+				Selector: Selector{"foo", "bar"},
+				NameBinding: CollectionNameBinding{
+					Mode:    CollectionBindDefault,
+					Default: "elem",
+				},
+				Expression: &CollectionExpression{
+					Operator: CollectionOpAll,
+					Selector: Selector{"elem", "Checks"},
+					NameBinding: CollectionNameBinding{
+						Mode:    CollectionBindDefault,
+						Default: "chk",
+					},
+					Expression: &MatchExpression{
+						Selector: Selector{"chk", "Status"},
+						Operator: MatchEqual,
+						Value:    &MatchValue{Raw: "passing"},
+					},
+				},
+			},
+			err: "",
+		},
 		"Double Quoted Value (Equal)": {
 			input:    "foo == \"bar\"",
 			expected: &MatchExpression{Selector: Selector{"foo"}, Operator: MatchEqual, Value: &MatchValue{Raw: "bar"}},
@@ -309,17 +472,17 @@ func TestExpressionParsing(t *testing.T) {
 		"Junk at the end 2": {
 			input:    "x in foo and ",
 			expected: nil,
-			err:      "1:14 (13): no match found, expected: \"(\", \"-\", \"0\", \"\\\"\", \"`\", \"not\", [ \\t\\r\\n], [1-9] or [a-zA-Z]",
+			err:      "1:14 (13): no match found, expected: \"(\", \"-\", \"0\", \"\\\"\", \"`\", \"all\", \"any\", \"not\", [ \\t\\r\\n], [1-9] or [a-zA-Z]",
 		},
 		"Junk at the end 3": {
 			input:    "x in foo or ",
 			expected: nil,
-			err:      "1:13 (12): no match found, expected: \"(\", \"-\", \"0\", \"\\\"\", \"`\", \"not\", [ \\t\\r\\n], [1-9] or [a-zA-Z]",
+			err:      "1:13 (12): no match found, expected: \"(\", \"-\", \"0\", \"\\\"\", \"`\", \"all\", \"any\", \"not\", [ \\t\\r\\n], [1-9] or [a-zA-Z]",
 		},
 		"Junk at the end 4": {
 			input:    "x in foo or not ",
 			expected: nil,
-			err:      "1:17 (16): no match found, expected: \"!=\", \"(\", \"-\", \"0\", \"==\", \"\\\"\", \"`\", \"contains\", \"in\", \"is\", \"matches\", \"not\", [ \\t\\r\\n], [1-9] or [a-zA-Z]",
+			err:      "1:17 (16): no match found, expected: \"!=\", \"(\", \"-\", \"0\", \"==\", \"\\\"\", \"`\", \"all\", \"any\", \"contains\", \"in\", \"is\", \"matches\", \"not\", [ \\t\\r\\n], [1-9] or [a-zA-Z]",
 		},
 		"Float Literal 1": {
 			input:    "foo == 0.2",

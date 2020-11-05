@@ -279,120 +279,25 @@ var evaluateTests map[string]expressionTest = map[string]expressionTest{
 			{expression: "Map in Nested", result: false, err: "Invalid match operator \"In\" for selector \"Nested\""},
 			{expression: "Nested.MapInfInf.foo == 4", result: false, err: "Selector \"Nested.MapInfInf.foo\" is not valid"},
 			{expression: "Nested.SliceOfMapInfInf.foo == 4", result: false, err: "Selector \"Nested.SliceOfMapInfInf.foo\" is not valid"},
-		},
-	},
-	"Interface Implementor": {
-		&testStructInterfaceImpl{
-			storage: map[string]*testFlatStruct{
-				"foo": &testFlatStruct{},
-				"bar": &testFlatStruct{Int: 1, Int8: 1, Int16: 1, Int32: 1, Int64: 1, Uint: 1, Uint8: 1, Uint16: 1, Uint32: 1, Uint64: 1, Float32: 1.0, Float64: 1.0, Bool: true, String: "one"},
-				"baz": &testFlatStruct{Int: 2, Int8: 2, Int16: 2, Int32: 2, Int64: 2, Uint: 2, Uint8: 2, Uint16: 2, Uint32: 2, Uint64: 2, Float32: 2.0, Float64: 2.0, Bool: true, String: "two"},
-			},
-		},
-		[]expressionCheck{
-			{expression: "foo.Int != 0", result: false, benchQuick: true},
-			{expression: "foo.Int == 0", result: true},
-			{expression: "foo.Int8 != 0", result: false},
-			{expression: "foo.Int8 == 0", result: true},
-			{expression: "foo.Int16 != 0", result: false},
-			{expression: "foo.Int16 == 0", result: true},
-			{expression: "foo.Int32 != 0", result: false},
-			{expression: "foo.Int32 == 0", result: true},
-			{expression: "foo.Int64 != 0", result: false},
-			{expression: "foo.Int64 == 0", result: true},
-			{expression: "foo.Uint != 0", result: false, benchQuick: true},
-			{expression: "foo.Uint == 0", result: true},
-			{expression: "foo.Uint8 != 0", result: false},
-			{expression: "foo.Uint8 == 0", result: true},
-			{expression: "foo.Uint16 != 0", result: false},
-			{expression: "foo.Uint16 == 0", result: true},
-			{expression: "foo.Uint32 != 0", result: false},
-			{expression: "foo.Uint32 == 0", result: true},
-			{expression: "foo.Uint64 != 0", result: false},
-			{expression: "foo.Uint64 == 0", result: true},
-			{expression: "foo.Float32 == 0.0", result: true},
-			{expression: "foo.Float32 != 0.0", result: false},
-			{expression: "foo.Float64 == 0.0", result: true},
-			{expression: "foo.Float64 != 0.0", result: false},
-			{expression: "foo.Bool != true", result: true},
-			{expression: "foo.Bool == true", result: false},
-			{expression: "foo.String == ``", result: true},
-			{expression: "foo.String != ``", result: false},
-			{expression: "bar.Int != 1", result: false, benchQuick: true},
-			{expression: "bar.Int == 1", result: true},
-			{expression: "bar.Int8 != 1", result: false},
-			{expression: "bar.Int8 == 1", result: true},
-			{expression: "bar.Int16 != 1", result: false},
-			{expression: "bar.Int16 == 1", result: true},
-			{expression: "bar.Int32 != 1", result: false},
-			{expression: "bar.Int32 == 1", result: true},
-			{expression: "bar.Int64 != 1", result: false},
-			{expression: "bar.Int64 == 1", result: true},
-			{expression: "bar.Uint != 1", result: false, benchQuick: true},
-			{expression: "bar.Uint == 1", result: true},
-			{expression: "bar.Uint8 != 1", result: false},
-			{expression: "bar.Uint8 == 1", result: true},
-			{expression: "bar.Uint16 != 1", result: false},
-			{expression: "bar.Uint16 == 1", result: true},
-			{expression: "bar.Uint32 != 1", result: false},
-			{expression: "bar.Uint32 == 1", result: true},
-			{expression: "bar.Uint64 != 1", result: false},
-			{expression: "bar.Uint64 == 1", result: true},
-			{expression: "bar.Float32 == 1.0", result: true},
-			{expression: "bar.Float32 != 1.0", result: false},
-			{expression: "bar.Float64 == 1.0", result: true},
-			{expression: "bar.Float64 != 1.0", result: false},
-			{expression: "bar.Bool != true", result: false},
-			{expression: "bar.Bool == true", result: true},
-			{expression: "bar.String == one", result: true},
-			{expression: "bar.String != one", result: false},
-			{expression: "baz.Int != 2", result: false, benchQuick: true},
-			{expression: "baz.Int == 2", result: true},
-			{expression: "baz.Int8 != 2", result: false},
-			{expression: "baz.Int8 == 2", result: true},
-			{expression: "baz.Int16 != 2", result: false},
-			{expression: "baz.Int16 == 2", result: true},
-			{expression: "baz.Int32 != 2", result: false},
-			{expression: "baz.Int32 == 2", result: true},
-			{expression: "baz.Int64 != 2", result: false},
-			{expression: "baz.Int64 == 2", result: true},
-			{expression: "baz.Uint != 2", result: false, benchQuick: true},
-			{expression: "baz.Uint == 2", result: true},
-			{expression: "baz.Uint8 != 2", result: false},
-			{expression: "baz.Uint8 == 2", result: true},
-			{expression: "baz.Uint16 != 2", result: false},
-			{expression: "baz.Uint16 == 2", result: true},
-			{expression: "baz.Uint32 != 2", result: false},
-			{expression: "baz.Uint32 == 2", result: true},
-			{expression: "baz.Uint64 != 2", result: false},
-			{expression: "baz.Uint64 == 2", result: true},
-			{expression: "baz.Float32 == 2.0", result: true},
-			{expression: "baz.Float32 != 2.0", result: false},
-			{expression: "baz.Float64 == 2.0", result: true},
-			{expression: "baz.Float64 != 2.0", result: false},
-			{expression: "baz.Bool != true", result: false},
-			{expression: "baz.Bool == true", result: true},
-			{expression: "baz.String == two", result: true},
-			{expression: "baz.String != two", result: false},
+			{expression: "any Nested.Map as key { key == foo }", result: true},
+			{expression: "all Nested.Map as _, value { value != foo }", result: true},
+			{expression: "all Nested.MapOfStructs as key, value { (key == one and value.Foo == 42) or (key == two and value.Foo == 77) }", result: true, benchQuick: true},
+			{expression: "any Nested.SliceOfInts as i { i == 7 }", result: true, benchQuick: true},
+			{expression: "all Nested.SliceOfStructs as i, v { i == 0 and v.X == 1 or i == 1 and v.X == 3 }", result: true},
 		},
 	},
 }
 
 func TestEvaluate(t *testing.T) {
-	t.Parallel()
 	for name, tcase := range evaluateTests {
 		// capture these values in the closure
 		name := name
 		tcase := tcase
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-
 			for i, expTest := range tcase.expressions {
 				// capture these values in the closure
 				expTest := expTest
 				t.Run(fmt.Sprintf("#%d", i), func(t *testing.T) {
-					t.Parallel()
-
 					expr, err := CreateEvaluator(expTest.expression, nil)
 					require.NoError(t, err)
 
@@ -424,12 +329,44 @@ func BenchmarkEvaluate(b *testing.B) {
 						b.Skip("Skipping benchmark - rerun with -bench-full to enable")
 					}
 
-					expr, err := CreateEvaluator(expTest.expression, nil)
+					expr, err := CreateEvaluatorForType(expTest.expression, nil, tcase.value)
 					require.NoError(b, err)
 
 					b.ResetTimer()
 					for n := 0; n < b.N; n++ {
 						_, err = expr.Evaluate(tcase.value)
+						if expTest.err != "" {
+							require.Error(b, err)
+						} else {
+							require.NoError(b, err)
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func BenchmarkValidate(b *testing.B) {
+	for name, tcase := range evaluateTests {
+		// capture these values in the closure
+		name := name
+		tcase := tcase
+		b.Run(name, func(b *testing.B) {
+			for i, expTest := range tcase.expressions {
+				// capture these values in the closure
+				expTest := expTest
+				b.Run(fmt.Sprintf("#%d", i), func(b *testing.B) {
+					if !expTest.benchQuick && !FullBenchmarks() {
+						b.Skip("Skipping benchmark - rerun with -bench-full to enable")
+					}
+
+					expr, err := CreateEvaluator(expTest.expression, nil)
+					require.NoError(b, err)
+
+					b.ResetTimer()
+					for n := 0; n < b.N; n++ {
+						err = expr.Validate(&expr.config, tcase.value)
 						if expTest.err != "" {
 							require.Error(b, err)
 						} else {

@@ -6,6 +6,30 @@ import (
 	"strings"
 )
 
+type FieldCollectionType int
+
+const (
+	// Indicates that the collection operators any/all should not be supported
+	CollectionTypeNone FieldCollectionType = iota
+	// Indicates that the collection operators should be supported with map semantics
+	CollectionTypeMap
+	// Indicates that the collection operators should be supported with list semantics
+	CollectionTypeList
+)
+
+func (ctype FieldCollectionType) String() string {
+	switch ctype {
+	case CollectionTypeNone:
+		return "None"
+	case CollectionTypeMap:
+		return "Map"
+	case CollectionTypeList:
+		return "List"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 // Function type for usage with a SelectorConfiguration
 type FieldValueCoercionFn func(value string) (interface{}, error)
 
@@ -43,13 +67,21 @@ type FieldConfiguration struct {
 	// user provided name will be used
 	StructFieldName string
 
+	// Either CollectionTypeNone, CollectionTypeMap or CollectionTypeList
+	CollectionType FieldCollectionType
+	// IndexConfiguration and ValueConfiguration contain the unbound field configuration
+	// for the index and value of a collection when the CollectionType is set to something
+	// other than CollectionTypeNone
+	IndexConfiguration *FieldConfiguration
+	ValueConfiguration *FieldConfiguration
+
 	// Nested field configurations
 	SubFields FieldConfigurations
 
 	// Function to run on the raw string value present in the expression
-	// syntax to coerce into whatever form the MatchExpressionEvaluator wants
+	// syntax to coerce into whatever form is needed during evaluation
 	// The coercion happens only once and will then be passed as the `value`
-	// parameter to all EvaluateMatch invocations on the MatchExpressionEvaluator.
+	// parameter to all evaluations using the same expression.
 	CoerceFn FieldValueCoercionFn
 
 	// List of MatchOperators supported for this field. This configuration
@@ -60,43 +92,52 @@ type FieldConfiguration struct {
 // Represents all the valid fields and their corresponding configuration
 type FieldConfigurations map[FieldName]*FieldConfiguration
 
-func generateFieldConfigurationInterface(rtype reflect.Type) (FieldConfigurations, bool) {
-	// Handle those types that implement our interface
-	if rtype.Implements(reflect.TypeOf((*MatchExpressionEvaluator)(nil)).Elem()) {
-		// TODO (mkeeler) Do we need to new a value just to call the function? Potentially we can
-		// lookup the func and invoke it with a nil pointer?
-		value := reflect.New(rtype)
-		// have to take the Elem() of the new value because New gives us a ptr to the type that
-		// we checked if it implements the interface
-		configs := value.Elem().Interface().(MatchExpressionEvaluator).FieldConfigurations()
-		return configs, true
+var primitiveMatchOps = map[reflect.Kind][]MatchOperator{
+	reflect.Bool:    []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Int:     []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Int8:    []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Int16:   []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Int32:   []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Int64:   []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Uint:    []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Uint8:   []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Uint16:  []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Uint32:  []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Uint64:  []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Float32: []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.Float64: []MatchOperator{MatchEqual, MatchNotEqual},
+	reflect.String:  []MatchOperator{MatchEqual, MatchNotEqual, MatchIn, MatchNotIn, MatchMatches, MatchNotMatches},
+}
+
+func primitiveFieldConfiguration(rkind reflect.Kind) *FieldConfiguration {
+	coerceFn, ok := primitiveCoercionFns[rkind]
+	if !ok {
+		return nil
+	}
+	ops, ok := primitiveMatchOps[rkind]
+	if !ok {
+		return nil
 	}
 
-	return nil, false
+	return &FieldConfiguration{
+		CoerceFn:            coerceFn,
+		SupportedOperations: ops,
+	}
 }
 
 func generateFieldConfigurationInternal(rtype reflect.Type) (*FieldConfiguration, error) {
-	if fields, ok := generateFieldConfigurationInterface(rtype); ok {
-		return &FieldConfiguration{
-			SubFields: fields,
-		}, nil
-	}
-
 	// must be done after checking for interface implementing
 	rtype = derefType(rtype)
 
 	// Handle primitive types
-	if coerceFn, ok := primitiveCoercionFns[rtype.Kind()]; ok {
+	if cfg := primitiveFieldConfiguration(rtype.Kind()); cfg != nil {
 		ops := []MatchOperator{MatchEqual, MatchNotEqual}
 
 		if rtype.Kind() == reflect.String {
 			ops = append(ops, MatchIn, MatchNotIn, MatchMatches, MatchNotMatches)
 		}
 
-		return &FieldConfiguration{
-			CoerceFn:            coerceFn,
-			SupportedOperations: ops,
-		}, nil
+		return cfg, nil
 	}
 
 	// Handle compound types
@@ -121,25 +162,29 @@ func generateFieldConfigurationInternal(rtype reflect.Type) (*FieldConfiguration
 }
 
 func generateSliceFieldConfiguration(elemType reflect.Type) (*FieldConfiguration, error) {
-	if coerceFn, ok := primitiveCoercionFns[elemType.Kind()]; ok {
-		// slices of primitives have somewhat different supported operations
-		return &FieldConfiguration{
-			CoerceFn:            coerceFn,
-			SupportedOperations: []MatchOperator{MatchIn, MatchNotIn, MatchIsEmpty, MatchIsNotEmpty},
-		}, nil
+	cfg := &FieldConfiguration{
+		CollectionType:     CollectionTypeList,
+		IndexConfiguration: primitiveFieldConfiguration(reflect.Int),
 	}
 
-	subfield, err := generateFieldConfigurationInternal(elemType)
+	if elemCfg := primitiveFieldConfiguration(elemType.Kind()); elemCfg != nil {
+		// slices of primitives have somewhat different supported operations
+		cfg.ValueConfiguration = elemCfg
+		cfg.CoerceFn = elemCfg.CoerceFn
+		cfg.SupportedOperations = []MatchOperator{MatchIn, MatchNotIn, MatchIsEmpty, MatchIsNotEmpty}
+		return cfg, nil
+	}
+
+	elemCfg, err := generateFieldConfigurationInternal(elemType)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg := &FieldConfiguration{
-		SupportedOperations: []MatchOperator{MatchIsEmpty, MatchIsNotEmpty},
-	}
+	cfg.ValueConfiguration = elemCfg
+	cfg.SupportedOperations = []MatchOperator{MatchIsEmpty, MatchIsNotEmpty}
 
-	if subfield != nil && len(subfield.SubFields) > 0 {
-		cfg.SubFields = subfield.SubFields
+	if elemCfg != nil && len(elemCfg.SubFields) > 0 {
+		cfg.SubFields = elemCfg.SubFields
 	}
 
 	return cfg, nil
@@ -154,6 +199,9 @@ func generateMapFieldConfiguration(keyType, valueType reflect.Type) (*FieldConfi
 		}
 
 		cfg := &FieldConfiguration{
+			CollectionType:      CollectionTypeMap,
+			IndexConfiguration:  primitiveFieldConfiguration(reflect.String),
+			ValueConfiguration:  subfield,
 			CoerceFn:            CoerceString,
 			SupportedOperations: []MatchOperator{MatchIsEmpty, MatchIsNotEmpty, MatchIn, MatchNotIn},
 		}
@@ -167,6 +215,10 @@ func generateMapFieldConfiguration(keyType, valueType reflect.Type) (*FieldConfi
 		return cfg, nil
 
 	default:
+		// TODO (any/all expressions) - We might be able to allow performing any/all expressions
+		// against maps without string indexes but just prevent binding the index so long as the
+		// value is supported. Do we need to is the question?
+
 		// For maps with non-string keys we can really only do emptiness checks
 		// and cannot index into them at all
 		return &FieldConfiguration{
@@ -265,10 +317,6 @@ func GenerateFieldConfigurations(topLevelType interface{}) (FieldConfigurations,
 }
 
 func generateFieldConfigurations(rtype reflect.Type) (FieldConfigurations, error) {
-	if fields, ok := generateFieldConfigurationInterface(rtype); ok {
-		return fields, nil
-	}
-
 	// Do this after we check for interface implementation
 	rtype = derefType(rtype)
 
@@ -297,7 +345,7 @@ func generateFieldConfigurations(rtype reflect.Type) (FieldConfigurations, error
 		}, nil
 	}
 
-	return nil, fmt.Errorf("Invalid top level type - can only use structs, map[string]* or an MatchExpressionEvaluator")
+	return nil, fmt.Errorf("Invalid top level type - can only use structs or an map[string]*")
 }
 
 func (config *FieldConfiguration) stringInternal(builder *strings.Builder, level int, path string) {
